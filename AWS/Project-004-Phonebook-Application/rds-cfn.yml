@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  
+Parameters:
+  mySubnets:
+    Description: Select at least 2 subnets
+    Type: List<AWS::EC2::Subnet::Id>
+    
+  myKP:
+    Description: Select your key
+    Type: AWS::EC2::KeyPair::KeyName
+    
+  myIT:
+    Description: Select instance type 
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+     - t2.micro
+     - t3.micro
+     - t2.nano
+     - t3.nano
+  myVPC:
+    Description: Select your VPC
+    Type: AWS::EC2::VPC::Id
+
+
+Resources:
+  myRDSSG:
+    Type: AWS::RDS::DBSecurityGroup
+    Properties:
+      DBSecurityGroupIngress: # Required
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+      GroupDescription: mysql enable  # Required
+     
+  myRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 0
+      DBInstanceClass: db.t2.micro # Required
+      DBInstanceIdentifier: myRDS 
+      DBName: clarusway_phonebook
+      # DBSecurityGroups:
+      #  - !Ref myRDSSG.GroupId
+      DeleteAutomatedBackups: true
+      Engine: mysql
+      EngineVersion: 8.0.25
+      MasterUserPassword: clarus1234
+      MasterUsername: admin
+      MultiAZ: false
+      Port: 3306
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !GetAtt mySG.GroupId
+  
+  myALB:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      SecurityGroups:
+        - !GetAtt mySG.GroupId
+      Subnets: !Ref mySubnets
+      Type: application
+
+
+  myListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: # Required
+        - Type: forward
+          TargetGroupArn: !Ref myTG
+      LoadBalancerArn: !Ref myALB # Required
+      Port: 80
+      Protocol: HTTP
+
+  myASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones: !GetAZs 
+      DesiredCapacity: "1"
+      HealthCheckGracePeriod: 90
+      HealthCheckType: ELB 
+      LaunchTemplate:
+        LaunchTemplateId: !Ref myLT 
+        Version: "1"
+      MaxSize: "3" # Required
+      MinSize: "1" # Required
+      TargetGroupARNs:
+        - Ref myTG 
+      
+  myCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref myASG  # Required
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.0
+        
+  myLT:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: ami-03d6f0efd7d3a3799
+        InstanceType: !Ref myIT
+        KeyName: !Ref myKP
+        SecurityGroupIds:
+          -!GetAtt mySG.GroupId
+        UserData: 
+          Fn::Base64:
+            !Sub |
+              #! /bin/bash
+              yum update -y 
+              yum install python3 -y 
+              pip3 install flask 
+              pip3 install flask_mysql
+              pip3 install Flask-SQLAlchemy
+              cd /home/ec2-user
+              echo "${!GetAtt myRDS.Endpoint.Address}" > /home/ec2-user/dbserver.endpoint
+              wget https://raw.githubusercontent.com/Ilkeradak/my-projects/main/AWS/Project-004-Phonebook-Application/phonebook-app.py
+              mkdir templates && cd templates
+              wget https://raw.githubusercontent.com/Ilkeradak/my-projects/main/AWS/Project-004-Phonebook-Application/templates/add-update.html
+              wget https://raw.githubusercontent.com/Ilkeradak/my-projects/main/AWS/Project-004-Phonebook-Application/templates/delete.html
+              wget https://raw.githubusercontent.com/Ilkeradak/my-projects/main/AWS/Project-004-Phonebook-Application/templates/index.html
+              cd ..
+              python3 phonebook-app.py
+
+      LaunchTemplateName: "String"
+      TagSpecifications:
+        TagSpecifications
+  myTG:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP 
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref myVPC 
+  mySG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable for SSH , HTTP AND AURO  # Required
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref myVPC 
+  
+Outputs:
